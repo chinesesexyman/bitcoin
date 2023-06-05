@@ -4,15 +4,16 @@ from test_framework.messages import CScriptWitness, CTransaction, CTxIn, CTxOut,
 from test_framework.script import CScript, taproot_construct, SegwitV0SignatureHash, hash160, LegacySignatureHash, SIGHASH_ALL
 from test_framework.script import *
 from test_framework.script_util import key_to_p2pkh_script
-from test_framework.address import address_to_scriptpubkey, output_key_to_p2tr, key_to_p2wpkh, program_to_witness_script, keyhash_to_p2pkh_script, keyhash_to_p2pkh, bech32_to_bytes, base58_to_byte
+from test_framework.address import output_key_to_p2tr, key_to_p2wpkh, program_to_witness_script, keyhash_to_p2pkh_script, keyhash_to_p2pkh, bech32_to_bytes, base58_to_byte
 from test_framework.key import ECKey, verify_schnorr, compute_xonly_pubkey, sign_schnorr
 from bip341 import taproot_tweak_pubkey, taproot_tweak_seckey
 import requests
 import json
 SEQUENCE = 0xffffffff
 MAIN = False
+CONTENT_TYPE_TXT = 'text/plain;charset=utf-8'
 
-secret = int(1).to_bytes(32, 'big').hex()
+secret = int(2).to_bytes(32, 'big').hex()
 
 
 class CLIENT(object):
@@ -46,18 +47,19 @@ class CTxInX(CTxIn):
         self.scriptPubKey = scriptPubKey
 
 
-class TaprootKey(ECKey):
-    def __init__(self, secret, compressed=True, scripts=None) -> None:
+class ECKeyX(ECKey):
+    def __init__(self, secret, compressed=True, scripts=None, unlocking_leaf='') -> None:
         super().__init__()
         self.set(bytes.fromhex(secret), compressed)
         self.internal_private_key = bytes.fromhex(secret)
-        self.internal_public_key = compute_xonly_pubkey(
-            self.internal_private_key)[0]
+        self.internal_public_key, self.parity = compute_xonly_pubkey(
+            self.internal_private_key)
         self.tap = taproot_construct(self.internal_public_key, scripts=scripts)
         self.output_private_key = taproot_tweak_seckey(
             self.internal_private_key, self.tap.merkle_root)
         self.output_public_key = taproot_tweak_pubkey(
             self.internal_public_key, self.tap.merkle_root)
+        self.unlocking_leaf = unlocking_leaf
 
 
 # 地址转换为输出脚本
@@ -74,8 +76,9 @@ def segwit_address_to_scriptpubkey(address):
 
 
 # 私钥转换为地址
-def secret_to_key(secret, compressed=True):
-    key = TaprootKey(secret, compressed=compressed)
+def secret_to_key(secret, compressed=True, scripts=None, unlocking_leaf=''):
+    key = ECKeyX(secret, compressed=compressed,
+                 scripts=scripts, unlocking_leaf=unlocking_leaf)
     # key = ECKey()
     # key.set(bytes.fromhex(secret), compressed)
     return key
@@ -120,13 +123,6 @@ def make_ordi_script(content: bytes, content_type):
     return ("ordi", CScript(ordi))
 
 
-key = secret_to_key(secret)
-print('p2pkh addr: %s' % secret_to_address(secret, 'p2pkh', main=MAIN))
-print('p2pwpkh addr: %s' % secret_to_address(secret, 'p2wpkh', main=MAIN))
-print(secret_to_p2tr_address(secret))
-print(address_to_scriptpubkey(secret_to_p2tr_address(secret)).hex())
-
-
 # 输入
 def txin_p2pkh(txid, idx, nValue, scriptPubKey=b''):
     outpoint = COutPoint(int(txid, base=16), idx)
@@ -160,7 +156,7 @@ def transaction(vins, vouts):
     return tx
 
 
-def sign_tx(tx: CTransaction, keys: list[list[str, ECKey]]):
+def sign_tx(tx: CTransaction, keys: list[list[str, ECKeyX]]):
     for idx in range(len(keys)):
         ktype, key = keys[idx]
         if ktype == 'p2pkh':
@@ -177,13 +173,13 @@ def sign_tx(tx: CTransaction, keys: list[list[str, ECKey]]):
             script_witness = CScriptWitness()
             witness = CTxInWitness()
             script_witness.stack = spend_p2tr_witnessStack(
-                key, tx, idx)
+                key, tx, idx, unlocking_leaf=key.unlocking_leaf)
             witness.scriptWitness = script_witness
             tx.wit.vtxinwit.append(witness)
     return tx
 
 
-def spend_p2pkh_scriptSig(key: ECKey, tx: CTransaction, idx: int, hash_type=SIGHASH_ALL):
+def spend_p2pkh_scriptSig(key: ECKeyX, tx: CTransaction, idx: int, hash_type=SIGHASH_ALL):
     script = CScript(key_to_p2pkh_script(key.get_pubkey().get_bytes()))
     sig_hash, err = LegacySignatureHash(script, tx, idx, hash_type)
     assert err == None
@@ -191,7 +187,7 @@ def spend_p2pkh_scriptSig(key: ECKey, tx: CTransaction, idx: int, hash_type=SIGH
     return CScript([signature + bytes(bytearray([hash_type])), key.get_pubkey().get_bytes()])
 
 
-def spend_p2wpkh_witnessStack(key: ECKey, tx: CTransaction, idx: int, nValue: int, hash_type=SIGHASH_ALL):
+def spend_p2wpkh_witnessStack(key: ECKeyX, tx: CTransaction, idx: int, nValue: int, hash_type=SIGHASH_ALL):
     pubkey_bytes = key.get_pubkey().get_bytes()
     script = key_to_p2pkh_script(pubkey_bytes)
     sig_hash = SegwitV0SignatureHash(script, tx, idx, hash_type, nValue)
@@ -199,40 +195,46 @@ def spend_p2wpkh_witnessStack(key: ECKey, tx: CTransaction, idx: int, nValue: in
     return [signature + bytes(bytearray([hash_type])), pubkey_bytes]
 
 
-def spend_p2tr_witnessStack(key: TaprootKey, tx: CTransaction, idx: int, hash_type=SIGHASH_DEFAULT):
-    # script = CScript([key.internal_public_key, OP_CHECKSIG])
-    script = CScript()
-    sig_hash = TaprootSignatureHash(
-        tx, tx.vin, hash_type, input_index=idx, scriptpath=False, script=script)
-    signature = sign_schnorr(key.output_private_key, sig_hash)
-    assert verify_schnorr(key.output_public_key[1], signature, sig_hash)
-    return [signature]
-    return [signature, script, bytes([LEAF_VERSION_TAPSCRIPT]) + key.internal_public_key]
+def spend_p2tr_witnessStack(key: ECKeyX, tx: CTransaction, idx: int, hash_type=SIGHASH_DEFAULT, unlocking_leaf=''):
+    if not unlocking_leaf or not key.tap.leaves:
+        sig_hash = TaprootSignatureHash(
+            tx, tx.vin, hash_type, input_index=idx, scriptpath=False, script=CScript())
+        signature = sign_schnorr(key.output_private_key, sig_hash)
+        assert verify_schnorr(key.output_public_key[1], signature, sig_hash)
+        return [signature]
+    else:
+        leaf = key.tap.leaves[unlocking_leaf]
+        sig_hash = TaprootSignatureHash(
+            tx, tx.vin, hash_type, input_index=idx, scriptpath=True, script=leaf.script)
+        signature = sign_schnorr(key.output_private_key, sig_hash)
+        cb = int(leaf.version + key.parity).to_bytes(1, "big") + \
+            key.internal_public_key + leaf.merklebranch
+        return [signature, leaf.script, cb]
 
 
 if __name__ == '__main__':
-    vins = [txin_p2tr(
-        '2a162f08ab2095cca7a8a2b3b7766aa6307ff04e2e80d0649fa33a2d495ad107', 1, 100000000, scriptPubKey=bytes.fromhex('5120da4710964f7852695de2da025290e24af6d8c281de5a0b902b7135fd9fd74d21')),
-        # txin_p2tr(
-        # 'e1e8e6cea488d2c8c0083c92dcd33e9e45e5a1944797865f6ccc4623d29d9bd0', 1, 999997000, scriptPubKey=bytes.fromhex('51202d2f7b2a700ab270dd515ef7a02f25c5a344066641fcac563e1b53eca4a456d3'))
+    scripts = [make_ordi_script(
+        b'{"p":"brc-20","op":"mint","tick":"sats","amt":"100000000"}', CONTENT_TYPE_TXT)]
+    key = secret_to_key(secret, scripts=scripts, unlocking_leaf='ordi')
+    print(secret_to_p2tr_address(secret, scripts=scripts))
+    print(key.tap.scriptPubKey.hex())
+    vins = [
+        txin_p2tr(
+            '0a17fa7b722e99b98d76886e36d984d087f9c7548a508c657f57fa65eb6b265a', 0, 99991000, scriptPubKey=bytes.fromhex('')),
     ]
     vouts = [
         txout_p2segwit(
-            99999000, 'bcrt1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssm803es'),
-        # txout_p2segwit(
-        #     999996000, 'bcrt1p95hhk2nsp2e8ph23tmm6qte9ck35gpnxg872c437rdf7ef9y2mfs3yh3x0')
+            99990000, 'bcrt1pmgt3a2skp359p0txes6lyc326nrgfn4mteuvw4ew9vzcaevcj38q2u0ky7'),
     ]
     tx = transaction(vins, vouts)
     tx = sign_tx(
-            tx, 
-            [
-                ['p2tr', key], 
-                # ['p2tr', key]
-            ]
-        )
+        tx,
+        [
+            ['p2tr', key],
+        ]
+    )
     raw_tx = tx.serialize_with_witness().hex()
     # print(raw_tx)
-    
 
     # client
     client = CLIENT('http://127.0.0.1:18443', user='test', password='test')

@@ -32,16 +32,15 @@ def varIntEncode(n: int) -> str:
     剩下7字节存储一组数据
     小端存储
     """
-    if n < 0:
-        raise
-    i = 0
-    while n > 127:
-        seg = '1' + bin(n % 128)[2:].zfill(7)  # exclude binary prefix
-        i = (i << 8) + int(seg, base=2)
-        n = n >> 7
-    seg = '0' + bin(n)[2:].zfill(7)
-    i = (i << 8) + int(seg, base=2)
-    return hex(i)[2:].zfill(2)
+    if n <= 0xfc:
+        return intEncode(n, 1)
+    elif n <= 0xFFFF:
+        return 'fd' + intEncode(n, 2)
+    elif n <= 0xFFFFFFFF:
+        return 'fe' + intEncode(n, 4)
+    elif n <= 0xFFFFFFFFFFFFFFFF:
+        return 'ff' + intEncode(n, 8)
+    return ''
 
 
 def varIntDecode(data: str) -> tuple[int, int]:
@@ -51,16 +50,15 @@ def varIntDecode(data: str) -> tuple[int, int]:
     """
     if data.startswith('0x'):
         data = data[2:]
-    l = 0
-    seg = []
-    while data[2*l] >= '8':
-        seg.append(data[2*l:2*l+2])
-        l = l + 1
-    n = int(data[2*l:2*l+2], base=16)
-    l = l + 1
-    for i in reversed(seg):
-        n = (n << 7) + int(i, base=16) - 128
-    return l, n
+    if data[0:2] <= 'fc':
+        return 1, intDecode(data[0:2])
+    elif data[0:2] == 'fd':
+        return 3, intDecode(data[2:6])
+    elif data[0:2] == 'fe':
+        return 5, intDecode(data[2:10])
+    elif data[0:2] == 'ff':
+        return 9, intDecode(data[2:18])
+    return 0, 0
 
 def varIntParser(data, desc):
     l, n = varIntDecode(data)
