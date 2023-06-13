@@ -1,64 +1,9 @@
 # encoding=utf8
 
 import sys
+from utilx import varIntDecode, intDecode
+from rpc_tools import client
 
-def intEncode(n: int, bytes: int) -> str:
-    """little endian
-    bytes: length of bytes
-    return: hex string
-    """
-    s = hex(n)[2:].zfill(bytes * 2)
-    ls = [s[i*2:i*2+2] for i in range(bytes)]
-    ls.reverse()
-    return ''.join(ls)
-
-
-def intDecode(data: str) -> int:
-    """little endian
-    data: hex string
-    """
-    if data.startswith('0x'):
-        data = data[2:]
-    ls = [data[i*2:i*2+2] for i in range(int(len(data)/2))]
-    ls.reverse()
-    return int(''.join(ls), base=16)
-
-
-def varIntEncode(n: int) -> str:
-    """int to VarInt
-    n: >= 0
-    return: binary_str, hex_str
-    每字节第一比特表示下一字节是否属于当前数据 1-属于 0-不属于
-    剩下7字节存储一组数据
-    小端存储
-    """
-    if n <= 0xfc:
-        return intEncode(n, 1)
-    elif n <= 0xFFFF:
-        return 'fd' + intEncode(n, 2)
-    elif n <= 0xFFFFFFFF:
-        return 'fe' + intEncode(n, 4)
-    elif n <= 0xFFFFFFFFFFFFFFFF:
-        return 'ff' + intEncode(n, 8)
-    return ''
-
-
-def varIntDecode(data: str) -> tuple[int, int]:
-    """parse data start with varInt
-    data: hex data start with varInt
-    return: varInt length, varInt value
-    """
-    if data.startswith('0x'):
-        data = data[2:]
-    if data[0:2] <= 'fc':
-        return 1, intDecode(data[0:2])
-    elif data[0:2] == 'fd':
-        return 3, intDecode(data[2:6])
-    elif data[0:2] == 'fe':
-        return 5, intDecode(data[2:10])
-    elif data[0:2] == 'ff':
-        return 9, intDecode(data[2:18])
-    return 0, 0
 
 def varIntParser(data, desc):
     l, n = varIntDecode(data)
@@ -140,4 +85,6 @@ def tx_decoder(tx: str):
 
 
 if __name__ == '__main__':
-    tx_decoder(sys.argv[1])
+    # tx = client.getrawtransaction(sys.argv[1])['result']['hex']
+    tx = '010000000001015bef9fdf786aad950a8f2827c9406ea4f7e314555f062dc92384945096efeb5c0000000000ffffffff0130d9f5050000000022512033f3b7af97c516ef0cff6dc43fba0162c947b6b3c2062e100e97da61af8fd9c903402ec49a70f2e30b4fb6e0a3649ca1f17e64d98be2f9242018935b6bca0feca2f125fbaebfc0fc3a3a9b6c9f2f288559d5bfc3ee357fa9b1ce10b5c321b517f7477b20c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5ac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800357b2270223a226272632d3230222c226f70223a226d696e74222c227469636b223a2263727364222c22616d74223a2231303030227d6821c0c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee500000000'
+    tx_decoder(tx)
