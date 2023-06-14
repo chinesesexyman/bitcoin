@@ -204,11 +204,11 @@ if __name__ == '__main__':
     print('locking script: %s' % key.tap.scriptPubKey.hex())
     vins = [
         txin_p2tr(
-            'bba560b7ef049a6abdf3c852a9f53c071057209f54b2c4199e11aaeb8de1c340', 0, 99995000, scriptPubKey=key.tap.scriptPubKey),
+            '2d086e3dae8ea53ffabfdfaaec012b41e51ab9be4e4082b2c3a5ebe6e7ea0aab', 0, 99994000, scriptPubKey=key.tap.scriptPubKey),
     ]
     vouts = [
         txout_p2segwit(
-            99994000, 'bcrt1px0em0tuhc5tw7r8ldhzrlwspvty50d4ncgrzuyqwjldxrtu0m8ysypm8mw'),
+            99993000, 'bcrt1px0em0tuhc5tw7r8ldhzrlwspvty50d4ncgrzuyqwjldxrtu0m8ysypm8mw'),
     ]
     tx = transaction(vins, vouts)
     tx = sign_tx(
